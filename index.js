@@ -1,66 +1,178 @@
-const express = require('express');
-const axios = require('axios');
+const express = require("express");
+const axios = require("axios");
+const cheerio = require("cheerio");
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 
-app.use(express.json());
+const DEVELOPER_INFO = {
+  name: "Sudhirxd",
+  github: "https://github.com/Sudhirxd",
+  instagram: "https://www.instagram.com/sudhirxd.in",
+  telegram: "https://t.me/Sudhirxd",
+  website: "https://www.sudhirxd.in"
+};
 
-app.get('/', (req, res) => {
-  res.send('VehicleInfo API proxy is running on Render.');
+const DESIRED_ORDER = [
+  "Owner Name",
+  "Father's Name",
+  "Owner Serial No",
+  "Model Name",
+  "Maker Model",
+  "Vehicle Class",
+  "Fuel Type",
+  "Fuel Norms",
+  "Registration Date",
+  "Insurance Company",
+  "Insurance No",
+  "Insurance Expiry",
+  "Insurance Upto",
+  "Fitness Upto",
+  "Tax Upto",
+  "PUC No",
+  "PUC Upto",
+  "Financier Name",
+  "Registered RTO",
+  "Address",
+  "City Name",
+  "Phone"
+];
+
+// Health check
+app.get("/", (req, res) => {
+  res.json({
+    status: "online",
+    service: "Vehicle RC Intelligence API",
+    version: "2.0",
+    endpoints: {
+      query: "/api/vehicle?rc=BR03H5690",
+      lookup: "/lookup/BR03H5690"
+    }
+  });
 });
 
-// Endpoint: /rc?num=JH05DE7988
-app.get('/rc', async (req, res) => {
-  const rcNumber = (req.query.num || 'JH05DE7988').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+// Shared vehicle lookup handler
+async function handleVehicleLookup(req, res) {
+  const rcNumber =
+    req.params.rc_number ||
+    req.query.rc ||
+    req.query.number ||
+    req.query.code;
 
   if (!rcNumber) {
-    return res.status(400).json({ error: 'registration_number is required' });
+    return res.status(400).json({
+      status: "error",
+      message: "RC parameter is required",
+      example: "/api/vehicle?rc=BR03H5690"
+    });
   }
 
-  const url = 'https://api-ct.vehicleinfo.app/gw/plt/bffctsvc/api/v1/garage/rc-search';
+  const rcClean = String(rcNumber)
+    .replace(/[^a-zA-Z0-9]/g, "")
+    .toUpperCase();
 
-  const params = {
-    registration_number: rcNumber
-  };
+  if (rcClean.length < 4 || rcClean.length > 15) {
+    return res.status(400).json({
+      status: "error",
+      message: "Invalid registration number format"
+    });
+  }
 
-  const headers = {
-    'User-Agent': 'okhttp/4.12.0',
-    'Accept': 'application/json, text/plain, */*',
-    'Accept-Encoding': 'gzip',
-    'authorization': 'Bearer eyJhbGciOiJFUzI1NiIsImtpZCI6IjI2YjM0NDgwLWQ5ZDEtNDQ4NS1iYzczLTRiN2IxOGJiOWUyNCIsInR5cCI6IkpXVCJ9.eyJhdWQiOltdLCJjbGllbnRfaWQiOiJjbGllbnRfWXVGVmVodWdxV2tOTkJLOTNIZ1Q0dyIsImV4cCI6MTc4OTkyMTIxNiwiZXh0Ijp7Imdyb3VwX2lkIjoiNThhNGQ5MzEtMTZhZi00MGY5LWI0ZmYtOGExNDU4YzA2ZjNkIiwic2Vzc2lvbl9pZCI6ImEyNWVhMWMxLTBiZTMtNDY2NS05MjIyLWMyOWNlZjM5M2Y5NiIsInVzZXJfdHlwZSI6IkVYVEVSTkFMIn0sImlhdCI6MTc4ODcxMTYxNSwiaXNzIjoiaHR0cHM6Ly9hdXRoLmNhcnMyNC5jb20vIiwianRpIjoiMDNlNDNhMzItOGU3Yy00ODRhLTlmYzktYTc1MjBlNmM1YjIyIiwibmJmIjoxNzg4NzExNjE1LCJzY3AiOlsib2ZmbGluZV9hY2Nlc3MiXSwic3ViIjoiNmY0YWQ5ZjktOGRiMy00NGVlLWFhNDUtZjJlM2Q1YTYxNmQxIn0.p96b8srL3ybB0lMC-B9HN-0lpsFr4q5kGgOTLbXpoK26wDwbOp4EY-b0SpcZdyJn8ysIqb5CbTzFQEY2Z4fE5g',
-    'x-user-city-id': '777',
-    'super_app_source': 'vehicleinfo_consumerapp',
-    'x-api-key': 'c91f6a2e4b78d0c5a31b2f8d7e09c3fa',
-    'x_app_instance_id': '547247478ea8e416185d98fbeb629954',
-    'x-device-id': '547247478ea8e416185d98fbeb629954',
-    'x-tenant-id': 'VI_INDIA',
-    'userid': '6f4ad9f9-8db3-44ee-aa45-f2e3d5a616d1',
-    'x_experiment_id': '252935e1-2b91-4b74-9734-9a40037cd09f',
-    'clientid': 'vehicleinfo_consumerapp',
-    'appversion': '323',
-    'osname': 'android',
-    'useragent': 'vehicleinfo_consumerapp/323',
-    'source': 'MobileApp',
-    'x_country': 'IN',
-    'x-tenant-slug': 'vehicleinfo'
-  };
+  const targetUrl =
+    `https://vahanx.in/rc-search/${encodeURIComponent(rcClean)}`;
 
   try {
-    const response = await axios.get(url, {
-      params,
-      headers,
-      timeout: 15000
+    const response = await axios.get(targetUrl, {
+      timeout: 15000,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; VehicleInfoAPI/2.0)",
+        "Accept": "text/html,application/xhtml+xml"
+      },
+      maxRedirects: 5
     });
-    res.json(response.data);
-  } catch (error) {
-    res.status(error.response ? error.response.status : 500).json({
-      error: error.message,
-      data: error.response ? error.response.data : null
+
+    const $ = cheerio.load(response.data);
+    const data = {};
+
+    // Extract fields from the page.
+    for (const key of DESIRED_ORDER) {
+      $("span").each((_, el) => {
+        if ($(el).text().trim() !== key) return;
+
+        const parent = $(el).parent();
+        const value =
+          parent.find("p").first().text().trim() ||
+          $(el).closest("div").find("p").first().text().trim();
+
+        if (value) {
+          data[key] = value;
+        }
+      });
+    }
+
+    if (Object.keys(data).length === 0) {
+      return res.status(404).json({
+        status: "error",
+        rc: rcClean,
+        message:
+          "No details extracted. The record may be unavailable or the upstream page structure may have changed."
+      });
+    }
+
+    return res.json({
+      status: "success",
+      rc: rcClean,
+      data
+    });
+  } catch (err) {
+    const upstreamStatus = err.response?.status;
+
+    console.error("Vehicle lookup failed:", {
+      status: upstreamStatus || null,
+      message: err.message
+    });
+
+    if (upstreamStatus === 404) {
+      return res.status(404).json({
+        status: "error",
+        rc: rcClean,
+        message: "No record found by the upstream website"
+      });
+    }
+
+    if (upstreamStatus === 403 || upstreamStatus === 429) {
+      return res.status(502).json({
+        status: "error",
+        message: "Upstream website denied or rate-limited the request"
+      });
+    }
+
+    return res.status(502).json({
+      status: "error",
+      message: "Unable to fetch data from the upstream website"
     });
   }
+}
+
+// API routes
+app.get("/api/vehicle", handleVehicleLookup);
+app.get("/lookup/:rc_number", handleVehicleLookup);
+
+// Unknown routes
+app.use((req, res) => {
+  res.status(404).json({
+    status: "error",
+    message: "Route not found",
+    path: req.path,
+    availableEndpoints: [
+      "/",
+      "/api/vehicle?rc=BR03H5690",
+      "/lookup/BR03H5690"
+    ]
+  });
 });
 
-app.listen(PORT, () => {
-  console.log(`Server listening on port ${PORT}`);
+// Start server
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Vehicle RC API running on port ${PORT}`);
 });
