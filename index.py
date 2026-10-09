@@ -14,50 +14,33 @@ DEVELOPER_INFO = {
     "website": "https://www.sudhirxd.in"
 }
 
+# Known labels present on VahanX vehicle card
+TARGET_LABELS = {
+    "modal name": "Model Name",
+    "model name": "Model Name",
+    "owner name": "Owner Name",
+    "code": "RTO Code",
+    "city name": "City Name",
+    "phone": "Phone",
+    "website": "Website",
+    "address": "Address",
+    "vehicle class": "Vehicle Class",
+    "fuel type": "Fuel Type",
+    "registration date": "Registration Date",
+    "insurance upto": "Insurance Upto",
+    "fitness upto": "Fitness Upto",
+    "puc upto": "PUC Upto"
+}
+
 @app.route('/', methods=['GET'])
 def home():
     return jsonify({
         "status": "online",
         "service": "Vehicle RC API",
-        "debug_url": "/debug/rc?num=OD195040",
-        "api_url": "/api/vehicle?rc=OD195040"
+        "endpoints": {
+            "api": "/api/vehicle?rc=OD195040"
+        }
     })
-
-# 👉 BROWSER ME INSPECT KARNE KE LIYE YEH ENDPOINT HAI
-@app.route('/debug/rc', methods=['GET'])
-def debug_inspect():
-    rc_number = request.args.get('num') or request.args.get('rc') or "OD195040"
-    rc_clean = re.sub(r'[^A-Za-z0-9]', '', str(rc_number)).upper()
-    
-    target_url = f"https://vahanx.in/rc-search/{rc_clean}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9"
-    }
-
-    try:
-        res = requests.get(target_url, headers=headers, timeout=15)
-        soup = BeautifulSoup(res.text, "html.parser")
-        
-        matches = {}
-        for term in ["HERO HF DELUXE", "Model Name", "Modal Name", "City Name", "Angul", "Owner Name"]:
-            pos = res.text.lower().find(term.lower())
-            if pos >= 0:
-                snippet = res.text[max(0, pos - 150): min(len(res.text), pos + 350)]
-                matches[term] = snippet.replace("\n", " ").strip()
-            else:
-                matches[term] = "NOT FOUND IN RAW HTML"
-
-        return jsonify({
-            "status_code": res.status_code,
-            "html_length": len(res.text),
-            "page_title": soup.title.get_text(" ", strip=True) if soup.title else "No title",
-            "search_snippets": matches,
-            "preview_first_500_chars": res.text[:500]
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/vehicle', methods=['GET'])
 def vehicle_lookup():
@@ -69,25 +52,59 @@ def vehicle_lookup():
     target_url = f"https://vahanx.in/rc-search/{rc_clean}"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9"
     }
 
     try:
         res = requests.get(target_url, headers=headers, timeout=15)
+        if res.status_code == 404:
+            return jsonify({"status": "error", "message": f"RC {rc_clean} not found"}), 404
+
         soup = BeautifulSoup(res.text, "html.parser")
         data = {}
 
-        # Generic Card / Div Parser
-        for block in soup.find_all(['div', 'li']):
-            texts = [t.strip() for t in block.stripped_strings]
-            if len(texts) == 2:
-                # Text[0] = Value, Text[1] = Label
-                if any(lbl in texts[1].lower() for lbl in ['name', 'code', 'city', 'phone', 'website', 'address']):
-                    data[texts[1]] = texts[0]
+        # 1. Target labels ko dhoondo (Modal Name, Owner Name, etc.)
+        for element in soup.find_all(True):
+            text = element.get_text(strip=True).lower()
+            if text in TARGET_LABELS:
+                std_key = TARGET_LABELS[text]
+                
+                # Check previous sibling for the actual value (Hero HF Deluxe etc.)
+                prev_sibling = element.find_previous_sibling()
+                if prev_sibling and prev_sibling.get_text(strip=True):
+                    val = prev_sibling.get_text(strip=True)
+                    if val.lower() != text and len(val) > 1:
+                        data[std_key] = val
+                        continue
+                
+                # Check parent container children
+                parent = element.parent
+                if parent:
+                    children = [c for c in parent.find_all(recursive=False) if c.get_text(strip=True)]
+                    for i, child in enumerate(children):
+                        if child == element and i > 0:
+                            val = children[i - 1].get_text(strip=True)
+                            if val.lower() != text:
+                                data[std_key] = val
+                                break
+
+        # Filter out FAQ / irrelevant text
+        data = {k: v for k, v in data.items() if not k.startswith("Q.") and "vahanx" not in v.lower()}
 
         if data:
-            return jsonify({"status": "success", "rc": rc_clean, "data": data})
-        return jsonify({"status": "error", "message": f"Could not parse vehicle details for RC: {rc_clean}"}), 404
+            return jsonify({
+                "status": "success",
+                "developer": DEVELOPER_INFO,
+                "rc": rc_clean,
+                "data": data
+            }), 200
+        else:
+            return jsonify({
+                "status": "error",
+                "message": f"Could not extract vehicle data for RC: {rc_clean}"
+            }), 404
+
     except Exception as e:
         return jsonify({"status": "error", "message": str(e)}), 502
 
