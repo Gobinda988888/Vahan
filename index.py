@@ -14,7 +14,6 @@ DEVELOPER_INFO = {
     "website": "https://www.sudhirxd.in"
 }
 
-# Known labels present on VahanX vehicle card
 TARGET_LABELS = {
     "modal name": "Model Name",
     "model name": "Model Name",
@@ -37,9 +36,7 @@ def home():
     return jsonify({
         "status": "online",
         "service": "Vehicle RC API",
-        "endpoints": {
-            "api": "/api/vehicle?rc=OD195040"
-        }
+        "endpoint": "/api/vehicle?rc=OD195040"
     })
 
 @app.route('/api/vehicle', methods=['GET'])
@@ -64,33 +61,33 @@ def vehicle_lookup():
         soup = BeautifulSoup(res.text, "html.parser")
         data = {}
 
-        # 1. Target labels ko dhoondo (Modal Name, Owner Name, etc.)
-        for element in soup.find_all(True):
-            text = element.get_text(strip=True).lower()
-            if text in TARGET_LABELS:
-                std_key = TARGET_LABELS[text]
+        # Har block ko check karein jisme label aur value pair ho
+        for container in soup.find_all(['div', 'li']):
+            # Sirf direct textual lines extract karein
+            lines = [t.strip() for t in container.stripped_strings if t.strip()]
+            
+            # Jab container me theek 2 text elements hon (Line 0 = Value, Line 1 = Label)
+            if len(lines) == 2:
+                val, lbl = lines[0], lines[1]
+                lbl_lower = lbl.lower()
                 
-                # Check previous sibling for the actual value (Hero HF Deluxe etc.)
-                prev_sibling = element.find_previous_sibling()
-                if prev_sibling and prev_sibling.get_text(strip=True):
-                    val = prev_sibling.get_text(strip=True)
-                    if val.lower() != text and len(val) > 1:
-                        data[std_key] = val
-                        continue
-                
-                # Check parent container children
-                parent = element.parent
-                if parent:
-                    children = [c for c in parent.find_all(recursive=False) if c.get_text(strip=True)]
-                    for i, child in enumerate(children):
-                        if child == element and i > 0:
-                            val = children[i - 1].get_text(strip=True)
-                            if val.lower() != text:
-                                data[std_key] = val
-                                break
+                if lbl_lower in TARGET_LABELS:
+                    clean_key = TARGET_LABELS[lbl_lower]
+                    if val.lower() != lbl_lower and len(val) > 1:
+                        data[clean_key] = val
 
-        # Filter out FAQ / irrelevant text
-        data = {k: v for k, v in data.items() if not k.startswith("Q.") and "vahanx" not in v.lower()}
+            # Agar label pehle aur value baad me ho (Line 0 = Label, Line 1 = Value)
+            elif len(lines) == 2:
+                lbl, val = lines[0], lines[1]
+                lbl_lower = lbl.lower()
+                if lbl_lower in TARGET_LABELS:
+                    clean_key = TARGET_LABELS[lbl_lower]
+                    if val.lower() != lbl_lower and len(val) > 1:
+                        data[clean_key] = val
+
+        # Clean-up table unwanted headers like "State / UT"
+        if data.get("RTO Code") == "State / UT":
+            data.pop("RTO Code", None)
 
         if data:
             return jsonify({
@@ -102,7 +99,7 @@ def vehicle_lookup():
         else:
             return jsonify({
                 "status": "error",
-                "message": f"Could not extract vehicle data for RC: {rc_clean}"
+                "message": f"Could not parse vehicle details for RC: {rc_clean}"
             }), 404
 
     except Exception as e:
@@ -111,4 +108,3 @@ def vehicle_lookup():
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
-    
