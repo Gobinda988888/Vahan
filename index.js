@@ -3,12 +3,12 @@ const axios = require("axios");
 const cheerio = require("cheerio");
 
 const app = express();
-const PORT = process.env.PORT || 10000;
+const PORT = process.env.PORT || 5000;
 
 const DEVELOPER_INFO = {
-  name: "Sudhirxd",
-  github: "https://github.com/Sudhirxd",
+  github: "https://www.github.com/Sudhirxd",
   instagram: "https://www.instagram.com/sudhirxd.in",
+  name: "Sudhirxd",
   telegram: "https://t.me/Sudhirxd",
   website: "https://www.sudhirxd.in"
 };
@@ -38,141 +38,257 @@ const DESIRED_ORDER = [
   "Phone"
 ];
 
-// Health check
 app.get("/", (req, res) => {
   res.json({
     status: "online",
-    service: "Vehicle RC Intelligence API",
-    version: "2.0",
+    service: "Vehicle RC Intelligence Express API",
+    developer: DEVELOPER_INFO,
     endpoints: {
+      health: "/health",
       query: "/api/vehicle?rc=BR03H5690",
       lookup: "/lookup/BR03H5690"
     }
   });
 });
 
-// Shared vehicle lookup handler
-async function handleVehicleLookup(req, res) {
-  const rcNumber =
+app.get("/health", (req, res) => {
+  res.json({
+    status: "ok",
+    uptime: process.uptime()
+  });
+});
+
+// Normalize HTML text
+function normalizeText(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Extract fields from common label/value HTML layouts
+function extractVehicleData(html) {
+  const $ = cheerio.load(html);
+  const data = {};
+
+  function save(label, value) {
+    const cleanLabel = normalizeText(label);
+    const cleanValue = normalizeText(value);
+
+    if (
+      DESIRED_ORDER.includes(cleanLabel) &&
+      cleanValue &&
+      cleanValue !== cleanLabel &&
+      !data[cleanLabel]
+    ) {
+      data[cleanLabel] = cleanValue;
+    }
+  }
+
+  // Layout 1: <span>Label</span><p>Value</p>
+  $("span").each((_, element) => {
+    const label = normalizeText($(element).text());
+
+    if (!DESIRED_ORDER.includes(label)) return;
+
+    const parent = $(element).parent();
+    const candidates = [
+      parent.find("p").first(),
+      parent.next().find("p").first(),
+      $(element).next("p")
+    ];
+
+    for (const candidate of candidates) {
+      if (candidate.length) {
+        const value = candidate.text();
+        if (normalizeText(value)) {
+          save(label, value);
+          break;
+        }
+      }
+    }
+  });
+
+  // Layout 2: table rows containing label and value
+  $("tr").each((_, element) => {
+    const cells = $(element).find("th, td");
+
+    if (cells.length >= 2) {
+      save($(cells[0]).text(), $(cells[1]).text());
+    }
+  });
+
+  // Layout 3: definition lists
+  $("dt").each((_, element) => {
+    save(
+      $(element).text(),
+      $(element).next("dd").text()
+    );
+  });
+
+  // Layout 4: common label/value containers
+  $("[class*='detail'], [class*='info'], [class*='field']")
+    .each((_, element) => {
+      const node = $(element);
+      const label = normalizeText(
+        node.find("span, label, strong, h3, h4").first().text()
+      );
+
+      if (!DESIRED_ORDER.includes(label)) return;
+
+      const valueNode = node.find("p, dd").first();
+
+      if (valueNode.length) {
+        save(label, valueNode.text());
+      }
+    });
+
+  const orderedData = {};
+
+  for (const key of DESIRED_ORDER) {
+    if (data[key]) orderedData[key] = data[key];
+  }
+
+  return orderedData;
+}
+
+async function vehicleLookup(req, res) {
+  const rawRC =
     req.params.rc_number ||
     req.query.rc ||
     req.query.number ||
     req.query.code;
 
-  if (!rcNumber) {
+  if (!rawRC || typeof rawRC !== "string") {
     return res.status(400).json({
       status: "error",
-      message: "RC parameter is required",
+      developer: DEVELOPER_INFO,
+      message: "RC parameter is required.",
       example: "/api/vehicle?rc=BR03H5690"
     });
   }
 
-  const rcClean = String(rcNumber)
-    .replace(/[^a-zA-Z0-9]/g, "")
-    .toUpperCase();
+  const rc = rawRC.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
 
-  if (rcClean.length < 4 || rcClean.length > 15) {
+  // Basic input validation; this is not proof that an RC exists.
+  if (rc.length < 5 || rc.length > 15) {
     return res.status(400).json({
       status: "error",
-      message: "Invalid registration number format"
+      developer: DEVELOPER_INFO,
+      message: "Invalid RC number format."
     });
   }
 
   const targetUrl =
-    `https://vahanx.in/rc-search/${encodeURIComponent(rcClean)}`;
+    `https://vahanx.in/rc-search/${encodeURIComponent(rc)}`;
 
   try {
     const response = await axios.get(targetUrl, {
       timeout: 15000,
+      maxRedirects: 5,
+      responseType: "text",
       headers: {
-        "User-Agent": "Mozilla/5.0 (compatible; VehicleInfoAPI/2.0)",
-        "Accept": "text/html,application/xhtml+xml"
-      },
-      maxRedirects: 5
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
+          "AppleWebKit/537.36 (KHTML, like Gecko) " +
+          "Chrome/131.0.0.0 Safari/537.36",
+        "Accept":
+          "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9"
+      }
     });
 
-    const $ = cheerio.load(response.data);
-    const data = {};
+    const contentType = response.headers["content-type"] || "";
 
-    // Extract fields from the page.
-    for (const key of DESIRED_ORDER) {
-      $("span").each((_, el) => {
-        if ($(el).text().trim() !== key) return;
-
-        const parent = $(el).parent();
-        const value =
-          parent.find("p").first().text().trim() ||
-          $(el).closest("div").find("p").first().text().trim();
-
-        if (value) {
-          data[key] = value;
-        }
+    if (
+      !contentType.includes("text/html") &&
+      !contentType.includes("application/xhtml+xml")
+    ) {
+      return res.status(502).json({
+        status: "error",
+        developer: DEVELOPER_INFO,
+        rc,
+        message:
+          "The upstream server did not return an HTML page. " +
+          "The source may require an API or JavaScript rendering."
       });
     }
+
+    const data = extractVehicleData(response.data);
 
     if (Object.keys(data).length === 0) {
-      return res.status(404).json({
+      return res.status(502).json({
         status: "error",
-        rc: rcClean,
+        developer: DEVELOPER_INFO,
+        rc,
         message:
-          "No details extracted. The record may be unavailable or the upstream page structure may have changed."
+          "No vehicle details could be extracted. " +
+          "The source page may have changed, blocked the request, " +
+          "or requires JavaScript rendering."
       });
     }
 
-    return res.json({
+    return res.status(200).json({
       status: "success",
-      rc: rcClean,
+      developer: DEVELOPER_INFO,
+      rc,
+      count: Object.keys(data).length,
       data
     });
+
   } catch (err) {
     const upstreamStatus = err.response?.status;
-
-    console.error("Vehicle lookup failed:", {
-      status: upstreamStatus || null,
-      message: err.message
-    });
 
     if (upstreamStatus === 404) {
       return res.status(404).json({
         status: "error",
-        rc: rcClean,
-        message: "No record found by the upstream website"
+        developer: DEVELOPER_INFO,
+        rc,
+        message: "The upstream page was not found."
       });
     }
 
-    if (upstreamStatus === 403 || upstreamStatus === 429) {
-      return res.status(502).json({
+    if (err.code === "ECONNABORTED") {
+      return res.status(504).json({
         status: "error",
-        message: "Upstream website denied or rate-limited the request"
+        developer: DEVELOPER_INFO,
+        rc,
+        message: "The upstream request timed out. Try again later."
       });
     }
+
+    console.error("Vehicle lookup failed:", {
+      rc,
+      code: err.code,
+      upstreamStatus,
+      message: err.message
+    });
 
     return res.status(502).json({
       status: "error",
-      message: "Unable to fetch data from the upstream website"
+      developer: DEVELOPER_INFO,
+      rc,
+      message:
+        upstreamStatus === 403
+          ? "The upstream source denied access."
+          : upstreamStatus
+            ? `The upstream source returned HTTP ${upstreamStatus}.`
+            : "Unable to connect to the upstream vehicle data source."
     });
   }
 }
 
-// API routes
-app.get("/api/vehicle", handleVehicleLookup);
-app.get("/lookup/:rc_number", handleVehicleLookup);
+app.get("/api/vehicle", vehicleLookup);
+app.get("/lookup/:rc_number", vehicleLookup);
 
-// Unknown routes
 app.use((req, res) => {
   res.status(404).json({
     status: "error",
-    message: "Route not found",
-    path: req.path,
-    availableEndpoints: [
-      "/",
-      "/api/vehicle?rc=BR03H5690",
-      "/lookup/BR03H5690"
-    ]
+    message: "Endpoint not found.",
+    available: ["/", "/health", "/api/vehicle?rc=BR03H5690",
+      "/lookup/BR03H5690"]
   });
 });
 
-// Start server
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Vehicle RC API running on port ${PORT}`);
+  console.log(`Server listening on port ${PORT}`);
 });
