@@ -1,13 +1,13 @@
 {
-  "name": "render-vehicleinfo-proxy",
+  "name": "vehicle-rc-api",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "express": "^5.1.0",
-    "axios": "^1.8.0",
-    "cheerio": "^1.0.0"
+    "axios": "^1.7.9",
+    "cheerio": "^1.0.0",
+    "express": "^4.21.2"
   }
 }
